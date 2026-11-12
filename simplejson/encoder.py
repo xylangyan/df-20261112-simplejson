@@ -350,7 +350,7 @@ class JSONEncoder(object):
         # This doesn't pass the iterator directly to ''.join() because the
         # exceptions aren't as detailed.  The list call should be roughly
         # equivalent to the PySequence_Fast that ''.join() would do.
-        chunks = self.iterencode(o)
+        chunks = self.iterencode(o, _one_shot=True)
         if not isinstance(chunks, (list, tuple)):
             chunks = list(chunks)
         if self.ensure_ascii:
@@ -358,7 +358,7 @@ class JSONEncoder(object):
         else:
             return u''.join(chunks)
 
-    def iterencode(self, o):
+    def iterencode(self, o, _one_shot=False):
         """Encode the given object and yield each string
         representation as available.
 
@@ -366,6 +366,18 @@ class JSONEncoder(object):
 
             for chunk in JSONEncoder().iterencode(bigobject):
                 mysocket.write(chunk)
+
+        This always returns a generator that pulls items from the input
+        lazily: the first chunk is yielded as soon as the first item has
+        been encoded (a top-level scalar still yields its complete
+        representation), and abandoning the generator leaves any source
+        iterator unconsumed. This keeps the memory footprint bounded by
+        the largest single object rather than the whole document, which
+        matters for streaming iterables (including one-shot iterators
+        nested inside other iterables).
+
+        ``encode`` passes ``_one_shot=True`` so the one-shot C encoder can
+        be used; it returns the entire document at once and is not lazy.
 
         """
         if self.check_circular:
@@ -412,7 +424,7 @@ class JSONEncoder(object):
         key_memo = {}
         int_as_string_bitcount = (
             53 if self.bigint_as_string else self.int_as_string_bitcount)
-        if c_make_encoder is not None:
+        if (_one_shot and c_make_encoder is not None):
             _iterencode = c_make_encoder(
                 markers, self.default, _encoder, self.indent,
                 self.key_separator, self.item_separator, self.sort_keys,
@@ -453,14 +465,14 @@ class JSONEncoderForHTML(JSONEncoder):
     def encode(self, o):
         # Override JSONEncoder.encode because it has hacks for
         # performance that make things more complicated.
-        chunks = self.iterencode(o)
+        chunks = self.iterencode(o, _one_shot=True)
         if self.ensure_ascii:
             return ''.join(chunks)
         else:
             return u''.join(chunks)
 
-    def iterencode(self, o):
-        chunks = super(JSONEncoderForHTML, self).iterencode(o)
+    def iterencode(self, o, _one_shot=False):
+        chunks = super(JSONEncoderForHTML, self).iterencode(o, _one_shot)
         for chunk in chunks:
             chunk = chunk.replace('&', '\\u0026')
             chunk = chunk.replace('<', '\\u003c')

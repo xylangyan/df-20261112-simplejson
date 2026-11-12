@@ -173,6 +173,16 @@ Basic Usage
     is that this function writes the resulting JSON document to *fp* instead
     of returning it.
 
+    The document is produced and written incrementally, one chunk at a time,
+    so the memory footprint stays bounded by the largest single value rather
+    than by the whole document. Iterables (including one-shot iterators
+    nested inside rows) are consumed lazily: the first chunk reaches *fp*
+    after only the first few items have been pulled, and if ``fp.write()``
+    stops the iteration the source is not consumed any further. If an error
+    occurs part-way through, the exception propagates and whatever was already
+    written is left incomplete rather than being closed off as a valid
+    document.
+
     .. note::
 
         When using Python 2, if *ensure_ascii* is set to false,
@@ -757,8 +767,17 @@ Encoders and decoders
             for chunk in JSONEncoder().iterencode(bigobject):
                 mysocket.write(chunk)
 
+      This returns a generator that pulls values from *o* lazily. Reading the
+      first chunk only consumes the items needed to encode it (for an
+      iterable, that is the opening bracket plus the first item), and
+      abandoning the generator stops consuming the source. This makes it
+      suitable for streaming data that is produced one row at a time, even
+      when rows contain one-shot iterators, without building the entire
+      document in memory.
+
       Note that :meth:`encode` has much better performance than
-      :meth:`iterencode`.
+      :meth:`iterencode` because it can use the eagerly-evaluating C
+      encoder to produce the whole document at once.
 
 .. class:: JSONEncoderForHTML(skipkeys=False, ensure_ascii=True, \
                               check_circular=True, allow_nan=False, \

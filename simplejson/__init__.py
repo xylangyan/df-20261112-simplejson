@@ -162,6 +162,13 @@ def dump(obj, fp, skipkeys=False, ensure_ascii=True, check_circular=True,
     """Serialize ``obj`` as a JSON formatted stream to ``fp`` (a
     ``.write()``-supporting file-like object).
 
+    Chunks are produced and written incrementally, and iterables are
+    consumed lazily, so memory use stays bounded by the largest single
+    value instead of the whole document. Breaking out of the write loop
+    leaves the source iterable unconsumed beyond what was already
+    written. If serialization fails part-way through, the exception
+    propagates and ``fp`` is left with an incomplete document.
+
     If *skipkeys* is true then ``dict`` keys that are not basic types
     (``str``, ``int``, ``long``, ``float``, ``bool``, ``None``)
     will be skipped instead of raising a ``TypeError``.

@@ -1,3 +1,14 @@
+Version 4.4.0 released 2026-XX-XX
+
+* ``JSONEncoder.iterencode()`` is lazy again: it returns a generator that
+  pulls values from the input on demand instead of encoding the whole
+  document before the first chunk becomes available. ``dump()`` now
+  streams chunks to the file as they are produced, so exporting a large
+  iterable (including one-shot iterators nested inside rows) no longer
+  buffers the entire JSON document in memory before the first write, and
+  stopping the write loop stops consuming the source. ``encode()`` and
+  ``dumps()`` keep using the one-shot C encoder and are unchanged.
+
 Version 4.3.0 released 2026-11-10
 
 * The C encoder no longer crashes when ``default()`` or ``for_json()``
