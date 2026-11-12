@@ -1,5 +1,9 @@
 Version 4.3.0 released 2026-11-10
 
+* ``JSONDecoder`` accepts a ``reusable_keys`` iterable of object key strings
+  whose string objects are reused across documents decoded by the same
+  decoder. Undeclared keys and all string values are left untouched, and
+  each decoder owns an independent lookup table.
 * The C encoder no longer crashes when ``default()`` or ``for_json()``
   shrinks or grows the list being encoded, and no longer reads a freed
   key when encoding a dict value removes its entry. Both encoders now

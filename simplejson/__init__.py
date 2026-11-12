@@ -402,7 +402,8 @@ _default_decoder = JSONDecoder()
 
 def load(fp, encoding=None, cls=None, object_hook=None, parse_float=None,
         parse_int=None, parse_constant=None, object_pairs_hook=None,
-        use_decimal=False, allow_nan=False, array_hook=None, **kw):
+        use_decimal=False, allow_nan=False, array_hook=None,
+        reusable_keys=None, **kw):
     """Deserialize ``fp`` (a ``.read()``-supporting file-like object containing
     a JSON document as `str` or `bytes`) to a Python object.
 
@@ -423,6 +424,11 @@ def load(fp, encoding=None, cls=None, object_hook=None, parse_float=None,
     example, :func:`collections.OrderedDict` will remember the order of
     insertion). If *object_hook* is also defined, the *object_pairs_hook*
     takes priority.
+
+    *reusable_keys*, if specified, is an iterable of strings naming object
+    keys that may be replaced with the provided string objects. Only these
+    declared keys are shared across documents; other object keys and all
+    string values are decoded normally.
 
     *parse_float*, if specified, will be called with the string of every
     JSON float to be decoded. By default, this is equivalent to
@@ -456,12 +462,13 @@ def load(fp, encoding=None, cls=None, object_hook=None, parse_float=None,
         parse_float=parse_float, parse_int=parse_int,
         parse_constant=parse_constant, object_pairs_hook=object_pairs_hook,
         use_decimal=use_decimal, allow_nan=allow_nan,
-        array_hook=array_hook, **kw)
+        array_hook=array_hook, reusable_keys=reusable_keys, **kw)
 
 
 def loads(s, encoding=None, cls=None, object_hook=None, parse_float=None,
         parse_int=None, parse_constant=None, object_pairs_hook=None,
-        use_decimal=False, allow_nan=False, array_hook=None, **kw):
+        use_decimal=False, allow_nan=False, array_hook=None,
+        reusable_keys=None, **kw):
     """Deserialize ``s`` (a ``str`` or ``unicode`` instance containing a JSON
     document) to a Python object.
 
@@ -482,6 +489,11 @@ def loads(s, encoding=None, cls=None, object_hook=None, parse_float=None,
     example, :func:`collections.OrderedDict` will remember the order of
     insertion). If *object_hook* is also defined, the *object_pairs_hook*
     takes priority.
+
+    *reusable_keys*, if specified, is an iterable of strings naming object
+    keys that may be replaced with the provided string objects. Only these
+    declared keys are shared across documents; other object keys and all
+    string values are decoded normally.
 
     *parse_float*, if specified, will be called with the string of every
     JSON float to be decoded.  By default, this is equivalent to
@@ -513,7 +525,7 @@ def loads(s, encoding=None, cls=None, object_hook=None, parse_float=None,
     if (cls is None and encoding is None and object_hook is None and
             parse_int is None and parse_float is None and
             parse_constant is None and object_pairs_hook is None
-            and array_hook is None
+            and array_hook is None and reusable_keys is None
             and not use_decimal and not allow_nan and not kw):
         return _default_decoder.decode(s)
     if cls is None:
@@ -524,6 +536,8 @@ def loads(s, encoding=None, cls=None, object_hook=None, parse_float=None,
         kw['object_pairs_hook'] = object_pairs_hook
     if array_hook is not None:
         kw['array_hook'] = array_hook
+    if reusable_keys is not None:
+        kw['reusable_keys'] = reusable_keys
     if parse_float is not None:
         kw['parse_float'] = parse_float
     if parse_int is not None:

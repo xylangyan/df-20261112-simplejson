@@ -32,6 +32,7 @@ def py_make_scanner(context):
     object_pairs_hook = context.object_pairs_hook
     array_hook = context.array_hook
     memo = context.memo
+    reusable_keys = getattr(context, 'reusable_keys', None)
 
     def _scan_once(string, idx):
         errmsg = 'Expecting value'
@@ -43,8 +44,12 @@ def py_make_scanner(context):
         if nextchar == '"':
             return parse_string(string, idx + 1, encoding, strict)
         elif nextchar == '{':
+            if reusable_keys is None:
+                return parse_object((string, idx + 1), encoding, strict,
+                    _scan_once, object_hook, object_pairs_hook, memo)
             return parse_object((string, idx + 1), encoding, strict,
-                _scan_once, object_hook, object_pairs_hook, memo)
+                _scan_once, object_hook, object_pairs_hook, memo,
+                reusable_keys=reusable_keys)
         elif nextchar == '[':
             return parse_array((string, idx + 1), _scan_once, array_hook)
         elif nextchar == 'n' and string[idx:idx + 4] == 'null':

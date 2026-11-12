@@ -327,7 +327,8 @@ Basic Usage
 .. function:: load(fp, encoding='utf-8', cls=None, object_hook=None, \
                    parse_float=None, parse_int=None, \
                    parse_constant=None, object_pairs_hook=None, \
-                   use_decimal=None, allow_nan=False, **kw)
+                   use_decimal=None, allow_nan=False, \
+                   reusable_keys=None, **kw)
 
    Deserialize *fp* (a ``.read()``-supporting file-like object containing a JSON
    document) to a Python object using this
@@ -370,7 +371,8 @@ Basic Usage
 .. function:: loads(s, encoding='utf-8', cls=None, object_hook=None, \
                     parse_float=None, parse_int=None, \
                     parse_constant=None, object_pairs_hook=None, \
-                    use_decimal=None, allow_nan=False, **kw)
+                    use_decimal=None, allow_nan=False, \
+                    reusable_keys=None, **kw)
 
     Deserialize *s* (a :class:`str` or :class:`unicode` instance containing a JSON
     document) to a Python object. :exc:`JSONDecodeError` will be
@@ -404,6 +406,12 @@ Basic Usage
     rely on the order that the key and value pairs are decoded (for example,
     :class:`collections.OrderedDict` will remember the order of insertion). If
     *object_hook* is also defined, the *object_pairs_hook* takes priority.
+
+    *reusable_keys*, if specified, is an iterable of strings naming object
+    keys that may be replaced with the provided string objects. Only these
+    declared keys are shared across documents; other object keys and all
+    string values are decoded normally. Each decoder has its own table, and
+    keys that were not declared are never added to it.
 
     *parse_float*, if specified, will be called with the string of every JSON
     float to be decoded.  By default, this is equivalent to ``float(num_str)``.
@@ -463,7 +471,8 @@ Encoders and decoders
 
 .. class:: JSONDecoder(encoding='utf-8', object_hook=None, parse_float=None, \
                        parse_int=None, parse_constant=None, \
-                       object_pairs_hook=None, strict=True, allow_nan=False)
+                       object_pairs_hook=None, strict=True, allow_nan=False, \
+                       reusable_keys=None)
 
    Simple JSON decoder.
 
@@ -514,6 +523,12 @@ Encoders and decoders
    rely on the order that the key and value pairs are decoded (for example,
    :class:`collections.OrderedDict` will remember the order of insertion). If
    *object_hook* is also defined, the *object_pairs_hook* takes priority.
+
+   *reusable_keys*, if specified, is an iterable of strings naming object
+   keys that may be replaced with the provided string objects. Only these
+   declared keys are shared across documents; other object keys and all
+   string values are decoded normally. Each decoder has its own table, and
+   keys that were not declared are never added to it.
 
    *parse_float*, if specified, will be called with the string of every JSON
    float to be decoded.  By default, this is equivalent to ``float(num_str)``.

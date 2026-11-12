@@ -3,7 +3,7 @@
 from __future__ import absolute_import
 import re
 import sys
-from .compat import PY3, unichr
+from .compat import PY3, string_types, unichr
 from .scanner import make_scanner, JSONDecodeError
 
 
@@ -147,12 +147,16 @@ WHITESPACE_STR = ' \t\n\r'
 
 def JSONObject(state, encoding, strict, scan_once, object_hook,
         object_pairs_hook, memo=None,
-        _w=WHITESPACE.match, _ws=WHITESPACE_STR):
+        _w=WHITESPACE.match, _ws=WHITESPACE_STR, reusable_keys=None):
     (s, end) = state
     # Backwards compatibility
     if memo is None:
         memo = {}
     memo_get = memo.setdefault
+    if reusable_keys is None:
+        reusable_key_get = None
+    else:
+        reusable_key_get = reusable_keys.get
     pairs = []
     # Use a slice to prevent IndexError from being raised, the following
     # check will raise a more specific ValueError if the string is empty
@@ -179,6 +183,8 @@ def JSONObject(state, encoding, strict, scan_once, object_hook,
     while True:
         key, end = scanstring(s, end, encoding, strict)
         key = memo_get(key, key)
+        if reusable_key_get is not None:
+            key = reusable_key_get(key, key)
 
         # To skip some function call overhead we optimize the fast paths where
         # the JSON key separator is ": " or just ":".
@@ -291,6 +297,22 @@ def JSONArray(state, scan_once, array_hook=None,
         values = array_hook(values)
     return values, end
 
+
+def _make_reusable_keys(reusable_keys):
+    if reusable_keys is None:
+        return None
+    if isinstance(reusable_keys, string_types):
+        raise TypeError("reusable_keys must be an iterable of strings, "
+                        "not a string")
+    table = {}
+    for key in reusable_keys:
+        if not isinstance(key, string_types):
+            raise TypeError("reusable keys must be strings, not %s"
+                            % type(key).__name__)
+        table.setdefault(key, key)
+    return table
+
+
 class JSONDecoder(object):
     """Simple JSON <http://json.org> decoder
 
@@ -325,7 +347,7 @@ class JSONDecoder(object):
     def __init__(self, encoding=None, object_hook=None, parse_float=None,
             parse_int=None, parse_constant=None, strict=True,
             object_pairs_hook=None, allow_nan=False,
-            array_hook=None):
+            array_hook=None, reusable_keys=None):
         """
         *encoding* determines the encoding used to interpret any
         :class:`str` objects decoded by this instance (``'utf-8'`` by
@@ -371,6 +393,12 @@ class JSONDecoder(object):
         ``True`` means that unescaped control characters are parse errors, if
         ``False`` then control characters will be allowed in strings.
 
+        *reusable_keys*, if specified, is an iterable of strings naming
+        object keys that may be shared across documents decoded by this
+        instance. Only these declared keys are replaced with the provided
+        string objects; all other keys and all string values are decoded
+        normally. Each decoder keeps its own lookup table.
+
         """
         if encoding is None:
             encoding = DEFAULT_ENCODING
@@ -384,6 +412,7 @@ class JSONDecoder(object):
         self.parse_constant = parse_constant
         self.strict = strict
         self.array_hook = array_hook
+        self.reusable_keys = _make_reusable_keys(reusable_keys)
         self.parse_object = JSONObject
         self.parse_array = JSONArray
         self.parse_string = scanstring

@@ -223,8 +223,12 @@ JSON_SCAN_FN(_parse_object)(PyScannerObject *s, PyObject *pystr,
             /* Intern the key through s->memo so repeated key strings
              * share one PyObject across this decode. Using SetDefault
              * collapses what used to be separate Get/Set lookups into
-             * a single atomic call. */
+             * a single atomic call. Then consult the persistent table
+             * of explicitly reusable keys. A miss is not inserted, so
+             * an undeclared key never enters that table. */
             if (json_memo_intern_key(s->memo, &key) < 0)
+                goto bail;
+            if (json_memo_reuse_key(s->reusable_keys, &key) < 0)
                 goto bail;
             idx = next_idx;
 

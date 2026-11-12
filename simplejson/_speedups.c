@@ -245,6 +245,7 @@ typedef struct _PyScannerObject {
     PyObject *parse_int;
     PyObject *parse_constant;
     PyObject *memo;
+    PyObject *reusable_keys;
 } PyScannerObject;
 
 /* X-macro listing every PyObject* field in PyScannerObject that must
@@ -263,7 +264,8 @@ typedef struct _PyScannerObject {
     X(parse_float)                    \
     X(parse_int)                      \
     X(parse_constant)                 \
-    X(memo)
+    X(memo)                           \
+    X(reusable_keys)
 
 static PyMemberDef scanner_members[] = {
     {"encoding", Py_T_OBJECT_EX, offsetof(PyScannerObject, encoding), READONLY, "encoding"},
@@ -556,6 +558,23 @@ json_memo_intern_key(PyObject *memo, PyObject **key_ptr)
     *key_ptr = canonical;
     return 0;
 #endif
+}
+
+static inline int
+json_memo_reuse_key(PyObject *reusable_keys, PyObject **key_ptr)
+{
+    PyObject *canonical = NULL;
+    int found;
+
+    if (reusable_keys == Py_None)
+        return 0;
+
+    found = json_PyDict_GetItemRef(reusable_keys, *key_ptr, &canonical);
+    if (found <= 0)
+        return found;
+    Py_DECREF(*key_ptr);
+    *key_ptr = canonical;
+    return 0;
 }
 
 /* Check if obj is a dict or frozendict (Python 3.15+).
@@ -2499,6 +2518,23 @@ scanner_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     LOAD_ATTR(parse_float, "parse_float");
     LOAD_ATTR(parse_int, "parse_int");
     LOAD_ATTR(parse_constant, "parse_constant");
+
+    /* Older custom scanner contexts do not have reusable_keys. Treat a
+     * missing attribute like JSONDecoder's default of None. */
+    s->reusable_keys = PyObject_GetAttrString(ctx, "reusable_keys");
+    if (s->reusable_keys == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            goto bail;
+        PyErr_Clear();
+        Py_INCREF(Py_None);
+        s->reusable_keys = Py_None;
+    }
+    else if (s->reusable_keys != Py_None &&
+             !PyDict_Check(s->reusable_keys)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "reusable_keys must be a dict or None");
+        goto bail;
+    }
 
 #undef LOAD_ATTR
 
