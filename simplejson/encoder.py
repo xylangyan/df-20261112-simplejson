@@ -161,6 +161,100 @@ encode_basestring_ascii = (
 encode_basestring = (
     c_encode_basestring or py_encode_basestring)
 
+
+def _encode_basestring_canonical(s, _PY3=PY3):
+    """Return the canonical JSON representation of a Python string.
+
+    The canonical form is ASCII-only: every character outside the
+    printable ASCII range (U+0020 through U+007E) is escaped, including
+    DEL (U+007F), so the UTF-8 encoding of the result is byte-identical
+    to the result itself. Escapes use the short forms for ``\\b``,
+    ``\\f``, ``\\n``, ``\\r``, ``\\t``, ``\\\\`` and ``\\"`` and
+    lowercase ``\\uXXXX`` (with surrogate pairs above the BMP) for
+    everything else.
+    """
+    if _PY3:
+        if isinstance(s, bytes):
+            s = str(s, 'utf-8')
+        elif type(s) is not str:
+            # convert an str subclass instance to exact str
+            # raise a TypeError otherwise
+            s = str.__str__(s)
+    else:
+        if isinstance(s, str) and HAS_UTF8.search(s) is not None:
+            s = unicode(s, 'utf-8')
+        elif type(s) not in (str, unicode):
+            # convert an str subclass instance to exact str
+            # convert a unicode subclass instance to exact unicode
+            # raise a TypeError otherwise
+            if isinstance(s, str):
+                s = str.__str__(s)
+            else:
+                s = unicode.__getnewargs__(s)[0]
+    def replace(match):
+        s = match.group(0)
+        try:
+            return ESCAPE_DCT[s]
+        except KeyError:
+            n = ord(s)
+            if n < 0x10000:
+                return '\\u%04x' % (n,)
+            else:
+                # surrogate pair
+                n -= 0x10000
+                s1 = 0xd800 | ((n >> 10) & 0x3ff)
+                s2 = 0xdc00 | (n & 0x3ff)
+                return '\\u%04x\\u%04x' % (s1, s2)
+    return '"' + str(ESCAPE_ASCII.sub(replace, s)) + '"'
+
+
+def _canonical_number(value, _Decimal=decimal.Decimal):
+    """Return the canonical JSON representation of a finite number.
+
+    ``int`` values keep their exact decimal digits. ``float`` and
+    ``Decimal`` values are normalized so that numerically equal values
+    (``1``, ``1.0``, ``Decimal('1.00')``) collapse to a single
+    representation while arbitrary decimal precision is preserved.
+    Negative zero of any type is emitted as ``0``.
+
+    The result is always a plain decimal literal without an exponent.
+    Normalization strips trailing zeros from the coefficient directly on
+    the ``Decimal`` tuple, so it never rounds and never depends on the
+    thread-local decimal context (unlike ``Decimal.normalize()``).
+    """
+    if isinstance(value, integer_types):
+        return str(value)
+    if isinstance(value, float):
+        # repr() round-trips a finite float exactly, so the Decimal
+        # conversion below introduces no extra error.
+        value = repr(value)
+    d = _Decimal(value)
+    if not d.is_finite():
+        raise ValueError(
+            "Out of range float values are not JSON compliant: " +
+            repr(value))
+    sign, digits, exponent = d.as_tuple()
+    if not any(digits):
+        # -0, -0.0 and Decimal('-0.00') all canonicalize to 0
+        return '0'
+    digits = list(digits)
+    while digits[-1] == 0:
+        # strip trailing zeros from the coefficient
+        digits.pop()
+        exponent += 1
+    digits = ''.join(map(str, digits))
+    if exponent >= 0:
+        text = digits + '0' * exponent
+    else:
+        point = len(digits) + exponent
+        if point > 0:
+            text = digits[:point] + '.' + digits[point:]
+        else:
+            text = '0.' + '0' * (-point) + digits
+    if sign:
+        text = '-' + text
+    return text
+
 class JSONEncoder(object):
     """Extensible JSON <http://json.org> encoder for Python data structures.
 
@@ -199,7 +293,8 @@ class JSONEncoder(object):
                  use_decimal=True, namedtuple_as_object=True,
                  tuple_as_array=True, bigint_as_string=False,
                  item_sort_key=None, for_json=False, ignore_nan=False,
-                 int_as_string_bitcount=None, iterable_as_array=False):
+                 int_as_string_bitcount=None, iterable_as_array=False,
+                 canonical=False):
         """Constructor for JSONEncoder, with sensible defaults.
 
         If skipkeys is false, then it is a TypeError to attempt
@@ -281,8 +376,76 @@ class JSONEncoder(object):
         as ``null`` in compliance with the ECMA-262 specification. If true,
         this will override *allow_nan*.
 
+        If *canonical* is true (default: ``False``), the output follows a
+        fixed canonical form intended for content-addressed storage, where
+        the UTF-8 bytes of the document are used as a content key:
+
+        * object keys are sorted lexicographically by code point;
+        * no whitespace is emitted (``(',', ':')`` separators);
+        * strings are ASCII-only: every character outside U+0020..U+007E
+          (including DEL) is escaped with the short escapes or lowercase
+          ``\\uXXXX`` (surrogate pairs above the BMP);
+        * numerically equal numbers collapse to one representation:
+          ``1``, ``1.0`` and ``Decimal('1.00')`` all encode as ``1``,
+          while arbitrary decimal precision is preserved and no exponent
+          notation is used;
+        * negative zero (``-0``, ``-0.0``, ``Decimal('-0.00')``) encodes
+          as ``0``;
+        * non-finite values (``nan``, ``inf``, ``-inf`` and non-finite
+          ``Decimal``) are rejected with ``ValueError``, regardless of
+          *allow_nan* and *ignore_nan*;
+        * dict keys must be strings (after decoding ``bytes`` with
+          *encoding*); any other key type raises ``TypeError``;
+        * :class:`~simplejson.RawJSON` values raise ``TypeError`` instead
+          of being embedded verbatim, so pre-encoded content cannot
+          bypass the canonical form.
+
+        Canonical mode implies *sort_keys*, *ensure_ascii* and compact
+        separators; it cannot be combined with *indent*, *separators*,
+        *item_sort_key*, *skipkeys*, *bigint_as_string*,
+        *int_as_string_bitcount*, *allow_nan* or *ignore_nan*, and it
+        requires *use_decimal*. It always uses the pure Python encoder
+        so that the output does not depend on the C extension.
+
         """
 
+        if canonical:
+            if skipkeys:
+                raise ValueError(
+                    'canonical mode rejects non-string keys instead of '
+                    'skipping them; skipkeys=True is not allowed')
+            if indent is not None:
+                raise ValueError(
+                    'canonical mode fixes the whitespace rules; '
+                    'indent is not allowed')
+            if separators is not None:
+                raise ValueError(
+                    'canonical mode fixes the separators; '
+                    'separators is not allowed')
+            if item_sort_key is not None:
+                raise ValueError(
+                    'canonical mode fixes the key ordering; '
+                    'item_sort_key is not allowed')
+            if bigint_as_string or int_as_string_bitcount is not None:
+                raise ValueError(
+                    'canonical mode never encodes numbers as strings; '
+                    'bigint_as_string and int_as_string_bitcount are '
+                    'not allowed')
+            if allow_nan or ignore_nan:
+                raise ValueError(
+                    'canonical mode always rejects non-finite numbers; '
+                    'allow_nan and ignore_nan are not allowed')
+            if not use_decimal:
+                raise ValueError(
+                    'canonical mode requires use_decimal=True so that '
+                    'Decimal values keep their precision')
+            ensure_ascii = True
+            sort_keys = True
+            # Pin the separators on the instance as well, so subclasses
+            # that read them see the canonical values.
+            self.item_separator = ','
+            self.key_separator = ':'
+        self.canonical = canonical
         self.skipkeys = skipkeys
         self.ensure_ascii = ensure_ascii
         self.check_circular = check_circular
@@ -343,7 +506,9 @@ class JSONEncoder(object):
             if (_encoding is not None and not (_encoding == 'utf-8')):
                 o = text_type(o, _encoding)
         if isinstance(o, string_types):
-            if self.ensure_ascii:
+            if self.canonical:
+                return _encode_basestring_canonical(o)
+            elif self.ensure_ascii:
                 return encode_basestring_ascii(o)
             else:
                 return encode_basestring(o)
@@ -372,7 +537,11 @@ class JSONEncoder(object):
             markers = {}
         else:
             markers = None
-        if self.ensure_ascii:
+        if self.canonical:
+            # Pin the string form to the pure Python escaper so the
+            # canonical bytes never depend on the C extension's rules.
+            _encoder = _encode_basestring_canonical
+        elif self.ensure_ascii:
             _encoder = encode_basestring_ascii
         else:
             _encoder = encode_basestring
@@ -409,10 +578,18 @@ class JSONEncoder(object):
 
             return text
 
+        if self.canonical:
+            def floatstr(o, _canonical_number=_canonical_number):
+                if o != o or o in (PosInf, -PosInf):
+                    raise ValueError(
+                        "Out of range float values are not JSON compliant: " +
+                        repr(o))
+                return _canonical_number(o)
+
         key_memo = {}
         int_as_string_bitcount = (
             53 if self.bigint_as_string else self.int_as_string_bitcount)
-        if c_make_encoder is not None:
+        if c_make_encoder is not None and not self.canonical:
             _iterencode = c_make_encoder(
                 markers, self.default, _encoder, self.indent,
                 self.key_separator, self.item_separator, self.sort_keys,
@@ -429,7 +606,8 @@ class JSONEncoder(object):
                 self.namedtuple_as_object, self.tuple_as_array,
                 int_as_string_bitcount,
                 self.item_sort_key, self.encoding, self.for_json,
-                self.iterable_as_array, Decimal=decimal.Decimal)
+                self.iterable_as_array, Decimal=decimal.Decimal,
+                _canonical=self.canonical)
         try:
             return _iterencode(o, 0)
         finally:
@@ -479,6 +657,7 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
         _int_as_string_bitcount, _item_sort_key,
         _encoding,_for_json,
         _iterable_as_array,
+        _canonical=False,
         ## HACK: hand-optimized bytecode; turn globals into locals
         _PY3=PY3,
         ValueError=ValueError,
@@ -497,6 +676,12 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
     ):
     if _use_decimal and Decimal is None:
         Decimal = decimal.Decimal
+    if _canonical:
+        # Pin the separators so the canonical form cannot be widened by
+        # subclass attributes; the constructor already rejects the
+        # corresponding arguments.
+        _item_separator = ','
+        _key_separator = ':'
     if _item_sort_key is not None and not callable(_item_sort_key):
         raise TypeError("item_sort_key must be None or callable")
     elif _sort_keys and _item_sort_key is None:
@@ -531,6 +716,13 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
         ):
             return str(value)
         return '"' + str(value) + '"'
+
+    def _encode_number(value):
+        # Canonical mode normalizes ints, floats and Decimals through one
+        # path so numerically equal values share a representation.
+        if _canonical:
+            return _canonical_number(value)
+        return _encode_decimal(value, _floatstr)
 
     def _iterencode_method(obj, result, _current_indent_level, encode):
         if markers is not None:
@@ -591,6 +783,11 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif _PY3 and isinstance(value, bytes) and _encoding is not None:
                         yield buf + _encoder(value)
                     elif isinstance(value, RawJSON):
+                        if _canonical:
+                            raise TypeError(
+                                'canonical mode does not embed RawJSON; '
+                                'decode the document first so it can be '
+                                're-encoded in canonical form')
                         yield buf + value.encoded_json
                     elif value is None:
                         yield buf + 'null'
@@ -603,7 +800,7 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif isinstance(value, float):
                         yield buf + _floatstr(value)
                     elif _use_decimal and isinstance(value, Decimal):
-                        yield buf + _encode_decimal(value, _floatstr)
+                        yield buf + _encode_number(value)
                     else:
                         yield buf
                         for_json = _for_json and call_method(value, 'for_json')
@@ -700,7 +897,31 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                 iteritems = dct.items()
             else:
                 iteritems = dct.iteritems()
-            if _item_sort_key is not None:
+            if _canonical:
+                # Canonical mode allows string keys only. The sort is by
+                # code point so it does not depend on dict insertion
+                # order or on the locale.
+                items = []
+                for k, v in iteritems:
+                    if isinstance(k, bytes) and _PY3:
+                        if _encoding is None:
+                            raise TypeError(
+                                'canonical mode requires str keys; '
+                                'got bytes and encoding is None')
+                        k = str(k, _encoding)
+                    if not isinstance(k, string_types):
+                        raise TypeError(
+                            'canonical mode requires string keys, not %s'
+                            % k.__class__.__name__)
+                    items.append((k, v))
+                items.sort(key=_item_sort_key)
+                for index in range(1, len(items)):
+                    if items[index - 1][0] == items[index][0]:
+                        raise ValueError(
+                            'canonical mode requires unique string keys; '
+                            '%r appears more than once after bytes keys '
+                            'are decoded' % (items[index][0],))
+            elif _item_sort_key is not None:
                 items = []
                 for k, v in dct.items():
                     if not isinstance(k, string_types):
@@ -729,6 +950,11 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif _PY3 and isinstance(value, bytes) and _encoding is not None:
                         yield _encoder(value)
                     elif isinstance(value, RawJSON):
+                        if _canonical:
+                            raise TypeError(
+                                'canonical mode does not embed RawJSON; '
+                                'decode the document first so it can be '
+                                're-encoded in canonical form')
                         yield value.encoded_json
                     elif value is None:
                         yield 'null'
@@ -741,7 +967,7 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif isinstance(value, float):
                         yield _floatstr(value)
                     elif _use_decimal and isinstance(value, Decimal):
-                        yield _encode_decimal(value, _floatstr)
+                        yield _encode_number(value)
                     else:
                         for_json = _for_json and call_method(value, 'for_json')
                         if for_json:
@@ -792,6 +1018,11 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
         elif _PY3 and isinstance(o, bytes) and _encoding is not None:
             yield _encoder(o)
         elif isinstance(o, RawJSON):
+            if _canonical:
+                raise TypeError(
+                    'canonical mode does not embed RawJSON; '
+                    'decode the document first so it can be '
+                    're-encoded in canonical form')
             yield o.encoded_json
         elif o is None:
             yield 'null'
@@ -830,7 +1061,7 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     for chunk in _iterencode_dict(o, _current_indent_level):
                         yield chunk
                 elif _use_decimal and isinstance(o, Decimal):
-                    yield _encode_decimal(o, _floatstr)
+                    yield _encode_number(o)
                 else:
                     while _iterable_as_array:
                         # Reject a revisited iterable before its __iter__

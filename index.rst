@@ -159,7 +159,8 @@ Basic Usage
                    namedtuple_as_object=True, tuple_as_array=True, \
                    bigint_as_string=False, sort_keys=False, \
                    item_sort_key=None, for_json=None, ignore_nan=False, \
-                   int_as_string_bitcount=None, iterable_as_array=False, **kw)
+                   int_as_string_bitcount=None, iterable_as_array=False, \
+                   canonical=False, **kw)
 
     Serialize *obj* as a JSON formatted stream to *fp*
     (a ``.write()``-supporting file-like object) using this
@@ -190,7 +191,8 @@ Basic Usage
                     namedtuple_as_object=True, tuple_as_array=True, \
                     bigint_as_string=False, sort_keys=False, \
                     item_sort_key=None, for_json=None, ignore_nan=False, \
-                    int_as_string_bitcount=None, iterable_as_array=False, **kw)
+                    int_as_string_bitcount=None, iterable_as_array=False, \
+                    canonical=False, **kw)
 
     Serialize *obj* to a JSON formatted :class:`str`.
 
@@ -307,6 +309,43 @@ Basic Usage
     :class:`float` values (``nan``, ``inf``, ``-inf``) will be serialized as
     ``null`` in compliance with the ECMA-262 specification. If true, this will
     override *allow_nan*.
+
+    If *canonical* is true (default: ``False``), the output is a fixed
+    canonical form intended for content-addressed storage, where the UTF-8
+    bytes of the encoded document are used as a content key. Two objects
+    that are equivalent but built in a different insertion order and with
+    different numeric types (for example ``1``, ``1.0`` and
+    ``Decimal('1.00')``) produce byte-identical output. The rules are:
+
+    * object keys are sorted lexicographically by code point;
+    * no whitespace is emitted (compact ``(',', ':')`` separators);
+    * strings are ASCII-only: every character outside ``U+0020`` through
+      ``U+007E`` (including DEL, ``U+007F``) is escaped with a short escape
+      or a lowercase ``\\uXXXX`` sequence, using surrogate pairs above the
+      BMP;
+    * numerically equal numbers share one representation: ``1``, ``1.0``
+      and ``Decimal('1.00')`` all encode as ``1``;
+    * arbitrary decimal precision is preserved -- ``Decimal`` values are
+      normalized, never rounded, and are emitted without exponent notation;
+    * negative zero (``-0``, ``-0.0``, ``Decimal('-0.00')``) encodes as
+      ``0``;
+    * non-finite values (``nan``, ``inf``, ``-inf`` and non-finite
+      ``Decimal``) raise :exc:`ValueError`, even with *allow_nan* or
+      *ignore_nan*;
+    * dict keys must be strings (``bytes`` keys are decoded with *encoding*
+      first); any other key type raises :exc:`TypeError`;
+    * :class:`RawJSON` values raise :exc:`TypeError` rather than being
+      embedded verbatim, so pre-encoded content cannot bypass these rules.
+
+    Canonical mode implies *sort_keys* and *ensure_ascii* and always uses
+    the pure Python encoder, so the output does not depend on whether the
+    C extension is loaded. It cannot be combined with *indent*,
+    *separators*, *item_sort_key*, *skipkeys*, *bigint_as_string*,
+    *int_as_string_bitcount*, *allow_nan*, *ignore_nan* or
+    ``use_decimal=False``.
+
+    .. versionadded:: 4.4.0
+        The *canonical* argument.
 
     If *int_as_string_bitcount* is a positive number ``n`` (default: ``None``),
     :class:`int` ``2**n`` and higher or lower than ``-2**n`` will be encoded as strings. This is to

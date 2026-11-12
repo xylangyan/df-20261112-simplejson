@@ -1,3 +1,11 @@
+Version 4.4.0
+* Add ``canonical=True`` to ``dump``, ``dumps`` and ``JSONEncoder`` for
+  content-addressed storage: keys are sorted by code point, whitespace and
+  string escaping are fixed, numerically equal int/float/Decimal values
+  share one representation while Decimal precision is preserved, negative
+  zero becomes ``0``, non-finite values are rejected, and non-string keys
+  and ``RawJSON`` are rejected.
+
 Version 4.3.0 released 2026-11-10
 
 * The C encoder no longer crashes when ``default()`` or ``for_json()``

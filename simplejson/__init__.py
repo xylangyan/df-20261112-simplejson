@@ -158,7 +158,7 @@ def dump(obj, fp, skipkeys=False, ensure_ascii=True, check_circular=True,
          namedtuple_as_object=True, tuple_as_array=True,
          bigint_as_string=False, sort_keys=False, item_sort_key=None,
          for_json=False, ignore_nan=False, int_as_string_bitcount=None,
-         iterable_as_array=False, **kw):
+         iterable_as_array=False, canonical=False, **kw):
     """Serialize ``obj`` as a JSON formatted stream to ``fp`` (a
     ``.write()``-supporting file-like object).
 
@@ -233,6 +233,22 @@ def dump(obj, fp, skipkeys=False, ensure_ascii=True, check_circular=True,
     ``null`` in compliance with the ECMA-262 specification. If true, this will
     override *allow_nan*.
 
+    If *canonical* is true (default: ``False``), the output is a fixed
+    canonical form meant for content-addressed storage, where the UTF-8
+    bytes of the document serve as a content key. Object keys are sorted by
+    code point, no whitespace is emitted, all non-ASCII characters (and
+    DEL) are escaped, numerically equal numbers (``1``, ``1.0`` and
+    :class:`~decimal.Decimal` ``'1.00'``) collapse to one representation
+    while arbitrary decimal precision is preserved, negative zero becomes
+    ``0``, non-finite numbers are rejected, non-string dict keys raise
+    :exc:`TypeError`, and :class:`~simplejson.RawJSON` values raise
+    :exc:`TypeError` instead of being embedded verbatim. Canonical mode
+    implies *sort_keys* and *ensure_ascii*, uses compact separators, and
+    cannot be combined with *indent*, *separators*, *item_sort_key*,
+    *skipkeys*, *bigint_as_string*, *int_as_string_bitcount*, *allow_nan*,
+    *ignore_nan* or *use_decimal=False*; it always uses the pure Python
+    encoder.
+
     To use a custom ``JSONEncoder`` subclass (e.g. one that overrides the
     ``.default()`` method to serialize additional types), specify it with
     the ``cls`` kwarg. NOTE: You should use *default* or *for_json* instead
@@ -248,12 +264,15 @@ def dump(obj, fp, skipkeys=False, ensure_ascii=True, check_circular=True,
         and not bigint_as_string and not sort_keys
         and item_sort_key is None and not for_json
         and not ignore_nan and int_as_string_bitcount is None
-        and not kw
+        and not canonical and not kw
     ):
         iterable = _default_encoder.iterencode(obj)
     else:
         if cls is None:
             cls = JSONEncoder
+        # Only pass canonical when it is enabled, so custom JSONEncoder
+        # subclasses that do not accept the new keyword keep working.
+        canonical_kw = {'canonical': True} if canonical else {}
         iterable = cls(skipkeys=skipkeys, ensure_ascii=ensure_ascii,
             check_circular=check_circular, allow_nan=allow_nan, indent=indent,
             separators=separators, encoding=encoding,
@@ -267,7 +286,7 @@ def dump(obj, fp, skipkeys=False, ensure_ascii=True, check_circular=True,
             for_json=for_json,
             ignore_nan=ignore_nan,
             int_as_string_bitcount=int_as_string_bitcount,
-            **kw).iterencode(obj)
+            **canonical_kw, **kw).iterencode(obj)
     # could accelerate with writelines in some versions of Python, at
     # a debuggability cost
     for chunk in iterable:
@@ -280,7 +299,7 @@ def dumps(obj, skipkeys=False, ensure_ascii=True, check_circular=True,
           namedtuple_as_object=True, tuple_as_array=True,
           bigint_as_string=False, sort_keys=False, item_sort_key=None,
           for_json=False, ignore_nan=False, int_as_string_bitcount=None,
-          iterable_as_array=False, **kw):
+          iterable_as_array=False, canonical=False, **kw):
     """Serialize ``obj`` to a JSON formatted ``str``.
 
     If ``skipkeys`` is true then ``dict`` keys that are not basic types
@@ -360,6 +379,22 @@ def dumps(obj, skipkeys=False, ensure_ascii=True, check_circular=True,
     ``null`` in compliance with the ECMA-262 specification. If true, this will
     override *allow_nan*.
 
+    If *canonical* is true (default: ``False``), the output is a fixed
+    canonical form meant for content-addressed storage, where the UTF-8
+    bytes of the document serve as a content key. Object keys are sorted by
+    code point, no whitespace is emitted, all non-ASCII characters (and
+    DEL) are escaped, numerically equal numbers (``1``, ``1.0`` and
+    :class:`~decimal.Decimal` ``'1.00'``) collapse to one representation
+    while arbitrary decimal precision is preserved, negative zero becomes
+    ``0``, non-finite numbers are rejected, non-string dict keys raise
+    :exc:`TypeError`, and :class:`~simplejson.RawJSON` values raise
+    :exc:`TypeError` instead of being embedded verbatim. Canonical mode
+    implies *sort_keys* and *ensure_ascii*, uses compact separators, and
+    cannot be combined with *indent*, *separators*, *item_sort_key*,
+    *skipkeys*, *bigint_as_string*, *int_as_string_bitcount*, *allow_nan*,
+    *ignore_nan* or *use_decimal=False*; it always uses the pure Python
+    encoder.
+
     To use a custom ``JSONEncoder`` subclass (e.g. one that overrides the
     ``.default()`` method to serialize additional types), specify it with
     the ``cls`` kwarg. NOTE: You should use *default* instead of subclassing
@@ -375,11 +410,14 @@ def dumps(obj, skipkeys=False, ensure_ascii=True, check_circular=True,
         and not bigint_as_string and not sort_keys
         and item_sort_key is None and not for_json
         and not ignore_nan and int_as_string_bitcount is None
-        and not kw
+        and not canonical and not kw
     ):
         return _default_encoder.encode(obj)
     if cls is None:
         cls = JSONEncoder
+    # Only pass canonical when it is enabled, so custom JSONEncoder
+    # subclasses that do not accept the new keyword keep working.
+    canonical_kw = {'canonical': True} if canonical else {}
     return cls(
         skipkeys=skipkeys, ensure_ascii=ensure_ascii,
         check_circular=check_circular, allow_nan=allow_nan, indent=indent,
@@ -394,7 +432,7 @@ def dumps(obj, skipkeys=False, ensure_ascii=True, check_circular=True,
         for_json=for_json,
         ignore_nan=ignore_nan,
         int_as_string_bitcount=int_as_string_bitcount,
-        **kw).encode(obj)
+        **canonical_kw, **kw).encode(obj)
 
 
 _default_decoder = JSONDecoder()
