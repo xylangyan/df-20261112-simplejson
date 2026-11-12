@@ -32,8 +32,129 @@ def _import_speedups():
 c_encode_basestring_ascii, c_encode_basestring, c_make_encoder = (
     _import_speedups())
 
-from .decoder import PosInf
+from .decoder import PosInf, JSONDecoder
 from .raw_json import RawJSON
+
+# Shared decoder used to re-validate RawJSON fragments when
+# reformat_raw_json is enabled. It is stateless across calls (its memo
+# dict is only used while scanning), so one instance is enough.
+_raw_json_decoder = JSONDecoder()
+
+
+def _reformat_raw_json(value, _current_indent_level, _indent,
+                       _item_separator, _key_separator, _encoder, _floatstr):
+    """Re-encode a RawJSON fragment so it matches the surrounding output.
+
+    The fragment must contain exactly one complete JSON value, optionally
+    surrounded by whitespace (so a trailing newline left over from the
+    source document is dropped). Anything else raises, pointing at the
+    fragment itself, instead of emitting a partially valid document.
+    The value is re-encoded with the same indent, separators and
+    ensure_ascii setting (via _encoder) as the enclosing encoder, nested
+    at _current_indent_level.
+    """
+    encoded = value.encoded_json
+    if not isinstance(encoded, string_types):
+        raise TypeError(
+            'RawJSON.encoded_json must be a string when reformat_raw_json '
+            'is enabled, not %s' % (type(encoded).__name__,))
+    obj = _raw_json_decoder.decode(encoded)
+    return u''.join(_reformat_iterencode(
+        obj, _current_indent_level, _indent, _item_separator,
+        _key_separator, _encoder, _floatstr))
+
+
+def _reformat_iterencode(obj, level, _indent, _item_separator,
+                         _key_separator, _encoder, _floatstr):
+    """Yield the JSON encoding of obj nested at indent level.
+
+    Mirrors the container formatting of _make_iterencode: when _indent
+    is None the output is compact with _item_separator between items,
+    otherwise items are placed on their own lines indented one level
+    deeper than their container.
+    """
+    if _indent is not None:
+        def newline_indent(level):
+            return '\n' + (_indent * level)
+    else:
+        def newline_indent(level):
+            return None
+
+    def encode_value(value, level):
+        if isinstance(value, string_types):
+            yield _encoder(value)
+        elif value is None:
+            yield 'null'
+        elif value is True:
+            yield 'true'
+        elif value is False:
+            yield 'false'
+        elif isinstance(value, integer_types):
+            yield str(value)
+        elif isinstance(value, float):
+            # Reuse the enclosing encoder's floatstr so allow_nan and
+            # ignore_nan (and the out-of-range error) match normal encoding,
+            # including inf produced by inputs like 1e400.
+            yield _floatstr(value)
+        elif isinstance(value, list):
+            for chunk in encode_list(value, level):
+                yield chunk
+        elif isinstance(value, dict):
+            for chunk in encode_dict(value, level):
+                yield chunk
+        else:
+            # Unreachable: the decoder only produces the types above.
+            raise TypeError('cannot reformat %s' % (type(value).__name__,))
+
+    def encode_list(lst, level):
+        if not lst:
+            yield '[]'
+            return
+        inner = level + 1
+        nl = newline_indent(inner)
+        yield '['
+        if nl is not None:
+            yield nl
+        first = True
+        for item in lst:
+            if first:
+                first = False
+            else:
+                yield _item_separator
+                if nl is not None:
+                    yield nl
+            for chunk in encode_value(item, inner):
+                yield chunk
+        if nl is not None:
+            yield newline_indent(level)
+        yield ']'
+
+    def encode_dict(dct, level):
+        if not dct:
+            yield '{}'
+            return
+        inner = level + 1
+        nl = newline_indent(inner)
+        yield '{'
+        if nl is not None:
+            yield nl
+        first = True
+        for key, value in dct.items():
+            if first:
+                first = False
+            else:
+                yield _item_separator
+                if nl is not None:
+                    yield nl
+            yield _encoder(key)
+            yield _key_separator
+            for chunk in encode_value(value, inner):
+                yield chunk
+        if nl is not None:
+            yield newline_indent(level)
+        yield '}'
+
+    return encode_value(obj, level)
 
 ESCAPE = re.compile(r'[\x00-\x1f\\"]')
 ESCAPE_ASCII = re.compile(r'([\\"]|[^\ -~])')
@@ -199,7 +320,8 @@ class JSONEncoder(object):
                  use_decimal=True, namedtuple_as_object=True,
                  tuple_as_array=True, bigint_as_string=False,
                  item_sort_key=None, for_json=False, ignore_nan=False,
-                 int_as_string_bitcount=None, iterable_as_array=False):
+                 int_as_string_bitcount=None, iterable_as_array=False,
+                 reformat_raw_json=False):
         """Constructor for JSONEncoder, with sensible defaults.
 
         If skipkeys is false, then it is a TypeError to attempt
@@ -281,6 +403,16 @@ class JSONEncoder(object):
         as ``null`` in compliance with the ECMA-262 specification. If true,
         this will override *allow_nan*.
 
+        If *reformat_raw_json* is true (default: ``False``), then
+        :class:`RawJSON` fragments are decoded and re-encoded instead of
+        being embedded byte-for-byte. The fragment must hold exactly one
+        complete JSON value (leading and trailing whitespace is allowed);
+        otherwise a :class:`~simplejson.JSONDecodeError` raised against the
+        fragment itself aborts the whole encode. Re-encoding applies this
+        encoder's *indent*, *separators* and *ensure_ascii*, so the nested
+        fragment is formatted consistently with the surrounding document.
+        When false, ``RawJSON.encoded_json`` is emitted verbatim as before.
+
         """
 
         self.skipkeys = skipkeys
@@ -307,6 +439,7 @@ class JSONEncoder(object):
         if default is not None:
             self.default = default
         self.encoding = encoding
+        self.reformat_raw_json = reformat_raw_json
 
     def default(self, o):
         """Implement this method in a subclass such that it returns
@@ -420,7 +553,8 @@ class JSONEncoder(object):
                 self.namedtuple_as_object, self.tuple_as_array,
                 int_as_string_bitcount,
                 self.item_sort_key, self.encoding, self.for_json,
-                self.ignore_nan, decimal.Decimal, self.iterable_as_array)
+                self.ignore_nan, decimal.Decimal, self.iterable_as_array,
+                self.reformat_raw_json)
         else:
             _iterencode = _make_iterencode(
                 markers, self.default, _encoder, self.indent, floatstr,
@@ -429,7 +563,8 @@ class JSONEncoder(object):
                 self.namedtuple_as_object, self.tuple_as_array,
                 int_as_string_bitcount,
                 self.item_sort_key, self.encoding, self.for_json,
-                self.iterable_as_array, Decimal=decimal.Decimal)
+                self.iterable_as_array, Decimal=decimal.Decimal,
+                reformat_raw_json=self.reformat_raw_json)
         try:
             return _iterencode(o, 0)
         finally:
@@ -480,6 +615,7 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
         _encoding,_for_json,
         _iterable_as_array,
         ## HACK: hand-optimized bytecode; turn globals into locals
+        reformat_raw_json=False,
         _PY3=PY3,
         ValueError=ValueError,
         string_types=string_types,
@@ -591,7 +727,13 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif _PY3 and isinstance(value, bytes) and _encoding is not None:
                         yield buf + _encoder(value)
                     elif isinstance(value, RawJSON):
-                        yield buf + value.encoded_json
+                        if reformat_raw_json:
+                            yield buf + _reformat_raw_json(
+                                value, _current_indent_level, _indent,
+                                _item_separator, _key_separator, _encoder,
+                                _floatstr)
+                        else:
+                            yield buf + value.encoded_json
                     elif value is None:
                         yield buf + 'null'
                     elif value is True:
@@ -729,7 +871,13 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
                     elif _PY3 and isinstance(value, bytes) and _encoding is not None:
                         yield _encoder(value)
                     elif isinstance(value, RawJSON):
-                        yield value.encoded_json
+                        if reformat_raw_json:
+                            yield _reformat_raw_json(
+                                value, _current_indent_level, _indent,
+                                _item_separator, _key_separator, _encoder,
+                                _floatstr)
+                        else:
+                            yield value.encoded_json
                     elif value is None:
                         yield 'null'
                     elif value is True:
@@ -792,7 +940,12 @@ def _make_iterencode(markers, _default, _encoder, _indent, _floatstr,
         elif _PY3 and isinstance(o, bytes) and _encoding is not None:
             yield _encoder(o)
         elif isinstance(o, RawJSON):
-            yield o.encoded_json
+            if reformat_raw_json:
+                yield _reformat_raw_json(
+                    o, _current_indent_level, _indent,
+                    _item_separator, _key_separator, _encoder, _floatstr)
+            else:
+                yield o.encoded_json
         elif o is None:
             yield 'null'
         elif o is True:

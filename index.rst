@@ -713,6 +713,14 @@ Encoders and decoders
    ``null`` in compliance with the ECMA-262 specification. If true, this will
    override *allow_nan*.
 
+   If *reformat_raw_json* is true (default: ``False``), then
+   :class:`RawJSON` fragments are decoded and re-encoded with this
+   encoder's *indent*, *separators* and *ensure_ascii* instead of being
+   embedded byte-for-byte. Each fragment must hold exactly one complete
+   JSON value, optionally surrounded by whitespace; anything else raises
+   :class:`JSONDecodeError` pointing at the fragment and aborts the encode
+   rather than emitting a partially valid document.
+
    .. method:: default(o)
 
     Implement this method in a subclass such that it returns a serializable

@@ -55,6 +55,26 @@ Example usage::
     print(dumps(payload))
     # Output: {"status": "ok", "data": {"a": 1, "b": 2}}
 
+By default the pre-encoded fragment is embedded byte-for-byte. Pass
+``reformat_raw_json=True`` to decode and re-encode it with the surrounding
+document's ``indent``, ``separators`` and ``ensure_ascii`` settings::
+
+    print(dumps(payload, indent=2, reformat_raw_json=True))
+    # Output:
+    # {
+    #   "status": "ok",
+    #   "data": {
+    #     "a": 1,
+    #     "b": 2
+    #   }
+    # }
+
+A fragment must contain exactly one complete JSON value; leading and
+trailing whitespace (such as a newline left over from the source document)
+is discarded. A fragment with trailing content or invalid JSON raises
+``JSONDecodeError`` referring to the fragment itself and aborts the
+encode instead of returning a partially formatted document.
+
 **Caveat:** ``RawJSON`` should be used with care. It bypasses normal
 serialization and validation, and is not recommended for general use
 unless the embedded JSON content is fully trusted.

@@ -1,3 +1,16 @@
+Version 4.4.0 (unreleased)
+
+* Added the ``reformat_raw_json`` option to ``dumps``, ``dump`` and
+  ``JSONEncoder``. When enabled, ``RawJSON`` fragments are decoded and
+  re-encoded with the enclosing document's ``indent``, ``separators`` and
+  ``ensure_ascii`` instead of being embedded byte-for-byte, so nested
+  fragments align with the surrounding formatting. Each fragment must hold
+  exactly one complete JSON value (leading/trailing whitespace is allowed);
+  anything else raises ``JSONDecodeError`` pointing at the fragment and
+  aborts the encode rather than emitting a partially valid document. The
+  default stays ``False``, leaving the existing verbatim ``RawJSON``
+  behavior and output bytes unchanged.
+
 Version 4.3.0 released 2026-11-10
 
 * The C encoder no longer crashes when ``default()`` or ``for_json()``

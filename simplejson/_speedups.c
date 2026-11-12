@@ -138,6 +138,7 @@ typedef struct {
     PyObject *JSON_attr_sort;         /* "sort" */
     PyObject *JSON_attr_encoded_json; /* "encoded_json" */
     PyObject *JSON_attr_add_note;     /* "add_note" (PEP 678, 3.11+) */
+    PyObject *JSON_attr_decode;       /* "decode" */
     PyObject *RawJSONType;
     PyObject *JSONDecodeError;
 } _speedups_state;
@@ -305,6 +306,7 @@ typedef struct _PyEncoderObject {
     PyObject *item_sort_key;
     PyObject *item_sort_kw;
     int for_json;
+    int reformat_raw_json;
 } PyEncoderObject;
 
 /* X-macro listing every PyObject* field in PyEncoderObject that must
@@ -2598,6 +2600,7 @@ encoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         "ignore_nan",
         "Decimal",
         "iterable_as_array",
+        "reformat_raw_json",
         NULL};
 
     PyEncoderObject *s;
@@ -2605,7 +2608,7 @@ encoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     PyObject *item_separator, *sort_keys, *skipkeys, *allow_nan, *key_memo;
     PyObject *use_decimal, *namedtuple_as_object, *tuple_as_array, *iterable_as_array;
     PyObject *int_as_string_bitcount, *item_sort_key, *encoding, *for_json;
-    PyObject *ignore_nan, *Decimal;
+    PyObject *ignore_nan, *Decimal, *reformat_raw_json;
     int is_true;
 
     /* Build the format string from per-argument pieces so that each "O"
@@ -2634,14 +2637,16 @@ encoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         "O"  /* ignore_nan */
         "O"  /* Decimal */
         "O"  /* iterable_as_array */
+        "|O" /* reformat_raw_json, optional for backward compatibility */
         ":make_encoder";
 
+    reformat_raw_json = Py_False;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, fmt, kwlist,
         &markers, &defaultfn, &encoder, &indent, &key_separator, &item_separator,
         &sort_keys, &skipkeys, &allow_nan, &key_memo, &use_decimal,
         &namedtuple_as_object, &tuple_as_array,
         &int_as_string_bitcount, &item_sort_key, &encoding, &for_json,
-        &ignore_nan, &Decimal, &iterable_as_array))
+        &ignore_nan, &Decimal, &iterable_as_array, &reformat_raw_json))
         return NULL;
 
     /* markers goes straight to PyDict_Contains, PyDict_SetItem and
@@ -2808,6 +2813,9 @@ encoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     s->Decimal = Decimal;
     s->for_json = PyObject_IsTrue(for_json);
     if (s->for_json < 0)
+        goto bail;
+    s->reformat_raw_json = PyObject_IsTrue(reformat_raw_json);
+    if (s->reformat_raw_json < 0)
         goto bail;
 
     return (PyObject *)s;
@@ -3167,11 +3175,95 @@ encoder_steal_encode(PyEncoderObject *s, JSON_Accu *rval,
     return rv;
 }
 
+/* Look up JSONDecoder from the already-imported module. This cannot run
+ * during module exec: simplejson.decoder imports this extension while it
+ * is still loading. The lookup is repeated per fragment rather than
+ * cached in shared state, which keeps it race-free under free threading;
+ * the import itself comes from sys.modules. Returns a new reference. */
+static PyObject *
+get_json_decoder_type(void)
+{
+    PyObject *module;
+    PyObject *type;
+
+    module = PyImport_ImportModule("simplejson.decoder");
+    if (module == NULL)
+        return NULL;
+    type = PyObject_GetAttrString(module, "JSONDecoder");
+    Py_DECREF(module);
+    return type;
+}
+
+/* Re-encode a RawJSON fragment through a fresh JSONDecoder followed by
+ * this encoder, so the fragment adopts the surrounding indent, separators
+ * and ensure_ascii setting. The fragment must hold exactly one complete
+ * JSON value (leading/trailing whitespace is allowed); otherwise the
+ * decoder's JSONDecodeError, which points at the fragment itself, aborts
+ * the whole encode. Returns 0 on success and -1 with an exception set on
+ * failure. */
+static int
+encoder_reformat_raw_json(PyEncoderObject *s, JSON_Accu *rval,
+                          PyObject *raw_obj, Py_ssize_t indent_level)
+{
+    _speedups_state *state = get_speedups_state(s->module_ref);
+    PyObject *decoder_type;
+    PyObject *encoded = NULL;
+    PyObject *decoder = NULL;
+    PyObject *decoded = NULL;
+    int rv;
+
+    encoded = PyObject_GetAttr(raw_obj, state->JSON_attr_encoded_json);
+    if (encoded == NULL)
+        return -1;
+#if PY_MAJOR_VERSION < 3
+    if (!PyUnicode_Check(encoded) && !PyString_Check(encoded)) {
+#else
+    if (!PyUnicode_Check(encoded)) {
+#endif
+        PyErr_Format(PyExc_TypeError,
+                     "RawJSON.encoded_json must be a string when "
+                     "reformat_raw_json is enabled, not %.80s",
+                     json_type_name(encoded));
+        Py_DECREF(encoded);
+        return -1;
+    }
+    /* A fresh decoder per fragment keeps the re-validation stateless and
+     * safe when several encoders share this module state. */
+    decoder_type = get_json_decoder_type();
+    if (decoder_type == NULL)
+        goto bail;
+    decoder = PyObject_CallNoArgs(decoder_type);
+    Py_DECREF(decoder_type);
+    if (decoder == NULL)
+        goto bail;
+    decoded = PyObject_CallMethodObjArgs(decoder, state->JSON_attr_decode,
+                                         encoded, NULL);
+    if (decoded == NULL)
+        goto bail;
+    if (Py_EnterRecursiveCall(" while encoding a JSON object"))
+        goto bail;
+    rv = encoder_listencode_obj(s, rval, decoded, indent_level);
+    Py_LeaveRecursiveCall();
+    if (rv < 0)
+        goto bail;
+    Py_DECREF(encoded);
+    Py_DECREF(decoder);
+    Py_DECREF(decoded);
+    return 0;
+
+bail:
+    Py_XDECREF(encoded);
+    Py_XDECREF(decoder);
+    Py_XDECREF(decoded);
+    return -1;
+}
+
 /* Fallback encoder path used when obj is not one of the directly-
  * supported JSON types (const, string, int, float, list, dict,
  * Decimal, etc.) and is not a _asdict / for_json candidate. Handles
  * three sub-cases in order:
- *   1. RawJSON — emit the already-encoded string verbatim.
+ *   1. RawJSON — emit the already-encoded string verbatim, or re-encode
+ *      it when reformat_raw_json is enabled.
  *   2. iterable_as_array — treat any iterable object as a JSON array.
  *      obj itself (not its iterator, which may be fresh on every
  *      visit) is the circular-reference marker, and the recursion
@@ -3193,6 +3285,8 @@ encoder_listencode_default(PyEncoderObject *s, JSON_Accu *rval,
     if (raw < 0)
         return -1;
     if (raw) {
+        if (s->reformat_raw_json)
+            return encoder_reformat_raw_json(s, rval, obj, indent_level);
         PyObject *encoded = PyObject_GetAttr(obj, state->JSON_attr_encoded_json);
         if (encoded == NULL)
             return -1;
@@ -4047,6 +4141,7 @@ reset_speedups_state_constants(_speedups_state *state)
     Py_CLEAR(state->JSON_attr_sort);
     Py_CLEAR(state->JSON_attr_encoded_json);
     Py_CLEAR(state->JSON_attr_add_note);
+    Py_CLEAR(state->JSON_attr_decode);
     Py_CLEAR(state->RawJSONType);
     Py_CLEAR(state->JSONDecodeError);
 }
@@ -4152,6 +4247,9 @@ init_speedups_state(_speedups_state *state, PyObject *module)
     state->JSON_attr_add_note = JSON_InternFromString("add_note");
     if (state->JSON_attr_add_note == NULL)
         return -1;
+    state->JSON_attr_decode = JSON_InternFromString("decode");
+    if (state->JSON_attr_decode == NULL)
+        return -1;
 
     (void)module;
     return 0;
@@ -4239,6 +4337,7 @@ speedups_traverse(PyObject *m, visitproc visit, void *arg)
     Py_VISIT(state->JSON_attr_asdict);
     Py_VISIT(state->JSON_attr_sort);
     Py_VISIT(state->JSON_attr_encoded_json);
+    Py_VISIT(state->JSON_attr_decode);
     Py_VISIT(state->RawJSONType);
     Py_VISIT(state->JSONDecodeError);
     return 0;
