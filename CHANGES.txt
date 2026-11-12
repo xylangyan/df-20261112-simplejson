@@ -1,3 +1,18 @@
+Version 4.4.0 (unreleased)
+
+* Added ``JSONStreamDecoder``, an incremental decoder for streams of
+  concatenated JSON documents.  Chunks are handed to ``feed()`` and the end
+  of input is marked with ``eof()`` (also available as ``close()`` and via
+  the ``decode(chunk, final=...)`` interface).  Complete root values are
+  returned one at a time, partial values stay buffered, and errors are
+  reported with offsets relative to the whole input.  Backslashes inside
+  strings and multi-byte UTF-8 characters split across chunk boundaries are
+  reassembled correctly, root-level numbers are held until their value is
+  unambiguous, and a trailing run of whitespace closes cleanly.  All
+  ``JSONDecoder`` options (``parse_float``, ``parse_int``,
+  ``parse_constant``, ``object_hook``, ``object_pairs_hook``,
+  ``array_hook``, ``strict``, ``allow_nan``, ``encoding``) apply unchanged.
+
 Version 4.3.0 released 2026-11-10
 
 * The C encoder no longer crashes when ``default()`` or ``for_json()``

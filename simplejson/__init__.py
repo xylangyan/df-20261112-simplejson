@@ -122,6 +122,7 @@ __version__ = '4.3.0'
 __all__ = [
     'dump', 'dumps', 'load', 'loads',
     'JSONDecoder', 'JSONDecodeError', 'JSONEncoder',
+    'JSONStreamDecoder',
     'OrderedDict', 'simple_first', 'RawJSON'
 ]
 
@@ -132,6 +133,7 @@ from decimal import Decimal
 from .errors import JSONDecodeError
 from .raw_json import RawJSON
 from .decoder import JSONDecoder
+from .stream import JSONStreamDecoder
 from .encoder import JSONEncoder, JSONEncoderForHTML
 
 def _import_OrderedDict():

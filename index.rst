@@ -570,6 +570,54 @@ Encoders and decoders
       :exc:`JSONDecodeError` will be raised if the given JSON
       document is not valid.
 
+.. class:: JSONStreamDecoder(encoding='utf-8', cls=None, **kw)
+
+   Incrementally decodes a stream of concatenated JSON documents delivered
+   in arbitrary chunks.  A backslash inside a string, or a multi-byte UTF-8
+   sequence, that happens to straddle a chunk boundary is held back instead
+   of being mistaken for the start of a new record.  Every decoder option of
+   :class:`JSONDecoder` (``parse_float``, ``parse_int``,
+   ``parse_constant``, ``object_hook``, ``object_pairs_hook``,
+   ``array_hook``, ``strict``, ``allow_nan``) is accepted and applies
+   unchanged; a pre-configured decoder can be passed with the ``decoder``
+   keyword.
+
+   .. method:: feed(chunk)
+
+      Append one :class:`str` or :class:`bytes` chunk and return the list of
+      complete root values it completes.  Partial values stay buffered until
+      later chunks arrive.  Bytes are decoded incrementally, so a multi-byte
+      character split between chunks is reassembled before parsing.
+
+   .. method:: eof(chunk=None)
+
+      Mark the end of the input, optionally feeding one final chunk, and
+      return the remaining complete values.  A stream whose only unconsumed
+      input is whitespace finishes cleanly; an incomplete or invalid value
+      raises :exc:`JSONDecodeError` with a position relative to the whole
+      input ever fed.  ``close`` is an alias for this method.
+
+   .. method:: decode(chunk[, final=False])
+
+      Equivalent to :meth:`feed`, also calling :meth:`eof` when *final* is
+      true, mirroring the interface of :class:`codecs.IncrementalDecoder`.
+
+   .. attribute:: offset
+
+      Absolute code-point offset of the first character not yet consumed.
+
+   When an error is raised, values already decoded from the same chunk are
+   available on the exception as its ``values`` attribute::
+
+      >>> import simplejson as json
+      >>> decoder = json.JSONStreamDecoder()
+      >>> decoder.feed('{"a": 1} ')
+      [{'a': 1}]
+      >>> decoder.feed(b'"abc\\')
+      []
+      >>> decoder.eof(b'\\" 42')
+      ['abc\\', 42]
+
 .. class:: JSONEncoder(skipkeys=False, ensure_ascii=True, \
                        check_circular=True, allow_nan=False, sort_keys=False, \
                        indent=None, separators=None, encoding='utf-8', \
